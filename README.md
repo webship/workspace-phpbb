@@ -78,6 +78,7 @@ no command of its own on the machine.
 | `ai/prompts/phpbb-build-and-test.md`, `phpbb-scenarios-for-an-area.md` | Two prompts: whole launch commands for a new session |
 | `src/index.ts` | `register(api)`: what the assistant is told about phpBB here |
 | `features/phpbb.feature` | Scenarios for the dashboard's own browser suite |
+| `features/phpbb-runtimes.feature` | The row, the test users and the pages of a board built on Docker Compose and on Kubernetes |
 
 The `workspacePlugin` block in `package.json` is the manifest the installer reads.
 
@@ -102,8 +103,9 @@ keeps the shape of the reference and changes only this:
 | Removing it | `ddev delete` | The same |
 | Tests menu of the row | Reads the project type | The plugin's claim: core 1.0.27 and later offer the plugin's test users (`phpbb`) |
 
-No public domain, no hosted service and no account anywhere: the board answers at `https://<name>.ddev.site` through
-the container tool's router.
+No public domain, no hosted service and no account anywhere: on DDEV the board answers at `https://<name>.ddev.site`
+through the container tool's router; on Docker Compose and Kubernetes at the address the build prints (see
+[Runtimes](#runtimes)).
 
 ## The commands
 
@@ -126,13 +128,53 @@ bash cmd-phpbb-project.sh myold --install --add-users --php-version 8.1       # 
 | `--board-name "<name>"` | The name of the board, shown at the top of its pages: the name of the project by default |
 | `--phpbb-version <3.3.x>` | The release, of the 3.3 line: `3.3.19` by default |
 | `--php-version <x.y>` | The PHP of the web container: `8.3` by default; the release takes `7.2` to `8.3` |
+| `--runtime <name>` | The container runtime to build on: `ddev` (the default), `docker`, `kubernetes` or `podman`. See [Runtimes](#runtimes) |
 | `--launch` | Open the board when it is ready |
 
-The board answers at `https://myboard.ddev.site` and its mail catcher at `https://myboard.ddev.site:8026`. A project
+On DDEV the board answers at `https://myboard.ddev.site` and its mail catcher at `https://myboard.ddev.site:8026`. A project
 of the same name is deleted first. The board is in `phpbb/` of the project.
 
 A build takes about a minute and a half. Check the free memory and disk first (`free -g`, `df -h /`), and build one
 site at a time on a machine others use.
+
+### Runtimes
+
+```bash
+bash cmd-phpbb-project.sh myboard --install --add-users                        # DDEV, the default
+bash cmd-phpbb-project.sh myboard --install --add-users --runtime docker       # Docker Compose
+bash cmd-phpbb-project.sh myboard --install --add-users --runtime kubernetes   # a Kubernetes cluster
+```
+
+Without `--runtime` a build takes `container.runtime` of the workspace's `settings.yml`, then DDEV.
+It needs a Webship Workspace with the container runtimes
+([webship/workspace#694](https://github.com/webship/workspace/issues/694)); on an older one the
+builder refuses `--runtime` and builds on DDEV only.
+
+RUNTIMES_TABLE
+
+"Yes" means it was run on a real board of that runtime.
+
+| Runtime | The board's address | What the project carries |
+| --- | --- | --- |
+| DDEV | `https://myboard.ddev.site`, its mail at `:8026` | `.ddev/config.yaml`, and `.ddev/config.phpbb.yaml`: the claim of the plugin |
+| Docker Compose | `http://127.0.0.1:<port>`, printed by the build | `compose.yaml` (with `platform: phpbb`: the claim), `.webship/runtime/Dockerfile` |
+| Kubernetes | `http://<node address>:<port>`, printed by the build | The same, and `k8s/` (the namespace `ws-myboard`) |
+
+What differs on Docker Compose and Kubernetes:
+
+- **The claim** is `platform: phpbb` in the `x-webship:` block of `compose.yaml` (the core's `rt_claim`), in place
+  of `.ddev/config.phpbb.yaml`. The tools and the row's Tests menu read it.
+- **The installer is told the runtime's address:** plain HTTP on the site's port, no secure cookie, and the board
+  follows the address it is asked on. Its mail goes over SMTP to the host `mail` of the project's stack.
+- **The database** needs nothing new: `db` / `db` / `db` on the host `db`, on every runtime.
+- **The suite** runs in the Workspace's tests container, which hands it the board's address (`LAUNCH_URL`) and its
+  mailbox (`MAIL_URL`); the testing setup writes no address into `cucumber.js` there.
+- **Not there yet:** HTTPS and a host name are DDEV's. Podman runs the same code as Docker Compose and was not run
+  yet.
+
+The same commands work on every runtime: `cmd-tools-phpbb-cli.sh`, `cmd-tools-add-users.sh`,
+`cmd-tools-testing.sh`. The pattern is the reference plugin's:
+[On Docker Compose and Kubernetes](https://github.com/webship/workspace-wordpress/blob/1.0.x/docs/cms-plugin-pattern.md#on-docker-compose-and-kubernetes).
 
 ### Work on a board
 
