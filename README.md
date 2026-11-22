@@ -152,9 +152,9 @@ builder refuses `--runtime` and builds on DDEV only.
 
 | | DDEV | Docker Compose | Kubernetes | Podman |
 | --- | --- | --- | --- | --- |
-| Build and install, with the default accounts | Yes | Not yet run | Not yet run | Not yet run |
-| The pages and the login | Yes | Not yet run | Not yet run | Not yet run |
-| The row in the dashboard, with the test users in its Tests menu | Yes | Not yet run | Not yet run | Not yet run |
+| Build and install, with the default accounts | Yes | Yes, in the CI of the pull request that added it | Not yet run | Not yet run |
+| The pages and the login | Yes | Yes, in the CI of the pull request that added it | Not yet run | Not yet run |
+| The row in the dashboard, with the test users in its Tests menu | Yes | Yes, in the CI of the pull request that added it | Not yet run | Not yet run |
 | The testing setup and the suite | Yes | Not yet run | Not yet run | Not yet run |
 | Export and import the database, remove | Yes | Not yet run | Not yet run | Not yet run |
 
