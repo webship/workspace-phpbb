@@ -152,13 +152,16 @@ builder refuses `--runtime` and builds on DDEV only.
 
 | | DDEV | Docker Compose | Kubernetes | Podman |
 | --- | --- | --- | --- | --- |
-| Build and install, with the default accounts | Yes | Yes, in the CI of the pull request that added it | Not yet run | Not yet run |
-| The pages and the login | Yes | Yes, in the CI of the pull request that added it | Not yet run | Not yet run |
-| The row in the dashboard, with the test users in its Tests menu | Yes | Yes, in the CI of the pull request that added it | Not yet run | Not yet run |
-| The testing setup and the suite | Yes | Not yet run | Not yet run | Not yet run |
-| Export and import the database, remove | Yes | Not yet run | Not yet run | Not yet run |
+| Build and install, with the default accounts and the sample content | Yes | Yes | Yes | The same code as Docker Compose, not yet run |
+| The pages and the login | Yes | Yes | Yes | Not yet run |
+| `cmd-tools-phpbb-cli.sh`: what the board is, `--run`, the accounts | Yes | Yes | Yes | Not yet run |
+| Test users, added and cancelled (the command line and the row's Tests menu) | Yes | Yes | Yes | Not yet run |
+| The testing setup and the suite, with the pack's examples | Yes | Yes | Yes | Not yet run |
+| The mail the board sends, read by the suite (`MAIL_URL`) | Yes | Yes, with webship/workspace#712 | Yes, with webship/workspace#712 | Not yet run |
+| Export and import the database | Yes | Yes | Yes | Not yet run |
+| The row in the dashboard, and remove | Yes | Yes | Yes | Not yet run |
 
-"Yes" means it was run on a real board of that runtime. "Not yet run" means the code is there and covered by the unit tests, and nobody ran it on a real board yet.
+"Yes" means it was run on a real board of that runtime.
 
 | Runtime | The board's address | What the project carries |
 | --- | --- | --- |
