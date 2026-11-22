@@ -150,9 +150,15 @@ It needs a Webship Workspace with the container runtimes
 ([webship/workspace#694](https://github.com/webship/workspace/issues/694)); on an older one the
 builder refuses `--runtime` and builds on DDEV only.
 
-RUNTIMES_TABLE
+| | DDEV | Docker Compose | Kubernetes | Podman |
+| --- | --- | --- | --- | --- |
+| Build and install, with the default accounts | Yes | Not yet run | Not yet run | Not yet run |
+| The pages and the login | Yes | Not yet run | Not yet run | Not yet run |
+| The row in the dashboard, with the test users in its Tests menu | Yes | Not yet run | Not yet run | Not yet run |
+| The testing setup and the suite | Yes | Not yet run | Not yet run | Not yet run |
+| Export and import the database, remove | Yes | Not yet run | Not yet run | Not yet run |
 
-"Yes" means it was run on a real board of that runtime.
+"Yes" means it was run on a real board of that runtime. "Not yet run" means the code is there and covered by the unit tests, and nobody ran it on a real board yet.
 
 | Runtime | The board's address | What the project carries |
 | --- | --- | --- |
