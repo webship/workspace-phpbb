@@ -88,6 +88,9 @@ test('the functions carry the names the core\'s tools look for, and build the bo
   assert.match(src, /name: \$\{account_name\}\n\s+password: \$\{account_pass\}/, 'the workspace account is the founder the installer makes');
   assert.match(src, /--nodejs-version=\$\(ddev_nodejs_version\)/, 'the build runs the Node.js of the workspace rule');
   assert.doesNotMatch(src, /ddev stop -y/, 'ddev stop takes no -y');
+  // The runtimes: the address is the runtime's to say, and the layer chooses the tool.
+  assert.doesNotMatch(src.replace(/^\s*#.*$/gm, '').replace(/echo "https:\/\/\$\{PROJECT_NAME\}\.ddev\.site"/, ''), /ddev\.site/, 'ddev.site only as the answer of a core with no layer');
+  assert.doesNotMatch(src.replace(/^\s*#.*$/gm, ''), /\b(docker|podman|kubectl) |command ddev/, 'only `ddev <verb>`: the layer chooses');
 });
 
 test('every container call is a plain verb of the container tool, and no file of the tool is read where a verb exists', () => {

@@ -85,8 +85,10 @@
       ]
     },
     "features": [
-      "features/phpbb.feature"
-    ]
+      "features/phpbb.feature",
+      "features/phpbb-runtimes.feature"
+    ],
+    "featuresSite": "cmd-phpbb-project.sh ci-phpbb --install --add-users --runtime docker"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

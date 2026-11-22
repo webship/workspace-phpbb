@@ -244,3 +244,127 @@ test('the first feature names no platform in a step, and no password', () => {
   assert.doesNotMatch(feature, /dD\.123123ddd"/);
   assert.doesNotMatch(feature, /register with/i, 'a suite never creates an account');
 });
+
+// ---- The runtimes: DDEV as before, and Docker Compose, Podman and Kubernetes through the core's layer ----
+
+/**
+ * Run the builder in a throwaway workspace with `ddev` replaced by a recorder of its calls and of what it reads on
+ * stdin, and the core's layer by stand-ins: `layer` is the runtime it answers with (runtime_of, rt_url, rt_mail_url,
+ * rt_claim, rt_is_platform), or '' for a core that has no layer yet. The installer's run leaves an installed board.
+ */
+function build(layer: string, env: Record<string, string> = {}) {
+  const p = project('drupal');
+  fs.rmSync(p.dir, { recursive: true });
+  const log = path.join(p.root, 'ddev.log');
+  const address = layer === 'kubernetes' ? 'http://172.18.0.2:30080' : 'http://127.0.0.1:41234';
+  const mail = layer === 'kubernetes' ? 'http://172.18.0.2:30081' : 'http://127.0.0.1:41235';
+  const fake = `ddev() { echo "ddev $*" >> "${log}" ; case "$*" in "describe -j"*) echo '{"raw":{"status":"running"}}' ;; *"install/phpbbcli.php install"*) mkdir -p phpbb && echo "<?php @define('PHPBB_INSTALLED', true);" > phpbb/config.php ;; esac ; if [ ! -t 0 ] ; then head -c 1500 | tr "\\n" " " | sed "s/^/  stdin: /" >> "${log}" ; echo >> "${log}" ; fi ; return 0 ; }`;
+  const prelude = [
+    fake,
+    'trim_project_name() { :; } ; drop_database() { :; } ; ddev_nodejs_version() { echo 24 ; } ; ddev_up() { ddev "$@" ; }',
+    layer ? [
+      `runtime_of() { echo "\${RUNTIME_ANSWER}" ; }`,
+      `rt_url() { [ "\${RUNTIME_ANSWER}" == ddev ] && echo "https://\${PROJECT_NAME}.ddev.site" || echo "${address}" ; }`,
+      `rt_mail_url() { echo "${mail}" ; }`,
+      `rt_claim() { echo "rt_claim $* in $(basename "$PWD")" >> "${log}" ; printf 'name: site1\\nx-webship:\\n  platform: %s\\n  runtime: %s\\n' "$1" "\${RUNTIME_ANSWER}" > compose.yaml ; }`,
+      'rt_is_platform() { [ -f "$1/.ddev/config.$2.yaml" ] || grep -q "^  platform: $2$" "$1/compose.yaml" 2>/dev/null ; }',
+    ].join('\n') : '',
+    `source ${FUNCTIONS}`,
+    'phpbb_build',
+  ].join('\n');
+  const r = spawnSync('bash', ['-c', prelude], { encoding: 'utf8', env: { ...process.env, ...ENV(p, log), INSTALL: 'yes', ADD_USERS: 'no', SAMPLE_CONTENT: 'no',
+    LAUNCH: 'no', RUNTIME: '_none_', RUNTIME_ANSWER: layer || 'ddev', ...env } });
+  const calls = fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n') : [];
+  return { r, calls, dir: p.dir, root: p.root };
+}
+
+/** The settings the installer was given on its stdin, as one line. */
+const installConfig = (calls: string[]) => calls[calls.findIndex((c) => /cat > \/var\/www\/html\/phpbb\/install\/install-config\.yml/.test(c)) + 1] || '';
+
+test('on DDEV the build is what it was: the same commands with the runtime layer and without it, its own claim file, https on the router', () => {
+  const without = build('');
+  const withLayer = build('ddev');
+  for (const b of [without, withLayer]) {
+    assert.strictEqual(b.r.status, 0, b.r.stderr + b.r.stdout);
+    assert.ok(fs.existsSync(path.join(b.dir, '.ddev', 'config.phpbb.yaml')), 'the claim of the plugin on DDEV');
+    assert.ok(!b.calls.some((c) => c.startsWith('rt_claim')), 'the layer\'s claim is not asked for on DDEV');
+    assert.match(installConfig(b.calls), /smtp_host: localhost .* cookie_secure: true .* server_protocol: https:\/\/ .* force_server_vars: true .* server_name: site1\.ddev\.site .* server_port: 443 /);
+    assert.match(b.r.stdout, /The board: https:\/\/site1\.ddev\.site · its mail: https:\/\/site1\.ddev\.site:8026 · its founder: owner1/);
+  }
+  assert.deepStrictEqual(withLayer.calls, without.calls);
+  assert.strictEqual(without.calls[0], 'ddev config --project-type=php --docroot=phpbb --webserver-type=apache-fpm --php-version=8.3 --project-name=site1 --nodejs-version=24');
+});
+
+test('on Docker Compose, Podman and Kubernetes the plugin claims the board, and the installer is told the address of the runtime and its mail catcher', () => {
+  const ddev = build('ddev').calls;
+  for (const [runtime, host, port, mail] of [['docker', '127.0.0.1', '41234', 'http://127.0.0.1:41235'], ['podman', '127.0.0.1', '41234', 'http://127.0.0.1:41235'], ['kubernetes', '172.18.0.2', '30080', 'http://172.18.0.2:30081']]) {
+    const b = build(runtime, { RUNTIME: runtime });
+    assert.strictEqual(b.r.status, 0, b.r.stderr + b.r.stdout);
+    assert.deepStrictEqual(b.calls.filter((c) => c !== '').slice(0, 2), [ddev[0], 'rt_claim phpbb in site1'], 'the claim right after ddev config, in the project');
+    assert.ok(!fs.existsSync(path.join(b.dir, '.ddev')), 'no .ddev folder on another runtime');
+    assert.match(installConfig(b.calls), new RegExp(`smtp_host: mail .* cookie_secure: false .* server_protocol: http:// .* force_server_vars: false .* server_name: ${host.replace(/\./g, '\\.')} .* server_port: ${port} `), runtime);
+    // The database is the same on every runtime: db / db / db on the host db.
+    assert.match(installConfig(b.calls), /dbhost: db .* dbuser: db .* dbpasswd: db .* dbname: db /);
+    assert.match(b.r.stdout, new RegExp(`The board: http://${host.replace(/\./g, '\\.')}:${port} · its mail: ${mail.replace(/[.]/g, '\\.')} · its founder: owner1`));
+    assert.doesNotMatch(b.r.stdout, /ddev\.site/);
+  }
+});
+
+test('--runtime on a workspace without the runtime layer is refused, never built on DDEV in silence', () => {
+  const b = build('', { RUNTIME: 'docker' });
+  assert.strictEqual(b.r.status, 1);
+  assert.match(b.r.stdout, /--runtime docker needs a Webship Workspace with the container runtimes/);
+  assert.deepStrictEqual(b.calls, [], 'nothing was configured or started');
+  assert.ok(!fs.existsSync(b.dir), 'no folder was made');
+  assert.strictEqual(build('', { RUNTIME: 'ddev' }).r.status, 0, 'asking for DDEV by name is fine there');
+});
+
+test('the builder takes --runtime, with the runtimes of the core\'s own builders', () => {
+  const args = fs.readFileSync(path.join(PKG, 'scripts', 'args', 'arg-phpbb.sh'), 'utf8');
+  assert.match(args, /parser\.add_argument\('--runtime',\s+dest='RUNTIME',\s+default="_none_",\s+choices=\['ddev', 'docker', 'podman', 'kubernetes'\],/);
+});
+
+test('a board is known on every runtime: the core\'s layer is asked for the claim when it is there', () => {
+  const asked = bash('rt_is_platform() { echo "asked $1 $2" ; [ "$1" == /a/board ] ; } ; phpbb_is_project /a/board ; echo "rc=$?" ; phpbb_is_project /a/other ; echo "rc=$?"');
+  assert.strictEqual(asked.stdout, 'asked /a/board phpbb\nrc=0\nasked /a/other phpbb\nrc=1\n');
+  assert.strictEqual(bash(`phpbb_is_project ${project('phpbb').dir}`).status, 0, 'without it: the claim file, as before');
+  assert.strictEqual(bash(`phpbb_is_project ${project('drupal').dir}`).status, 1);
+});
+
+test('on another runtime the testing hook writes no address: the tests container hands the suite LAUNCH_URL and MAIL_URL', () => {
+  const p = project('phpbb');
+  fs.rmSync(path.join(p.dir, '.ddev'), { recursive: true });
+  fs.writeFileSync(path.join(p.dir, 'compose.yaml'), 'name: site1\nx-webship:\n  platform: phpbb\n  runtime: docker\n  port: 41234\n');
+  const layer = 'runtime_of() { echo docker ; } ; rt_is_platform() { grep -q "^  platform: $2$" "$1/compose.yaml" ; } ; ';
+  const r = bash(`${layer} cd ${p.dir} && testing_configure_phpbb ${p.dir}`, ENV(p, path.join(p.root, 'ddev.log')));
+  assert.strictEqual(r.status, 0, r.stderr + r.stdout);
+  const cucumber = fs.readFileSync(path.join(p.dir, 'cucumber.js'), 'utf8');
+  assert.match(cucumber, /^ {6}mailUrl: process\.env\.MAIL_URL \|\| '',$/m);
+  assert.match(cucumber, /launchUrl: process\.env\.LAUNCH_URL \|\| 'http:\/\/localhost:8080'/, 'the scaffold\'s placeholder stays');
+  assert.doesNotMatch(cucumber, /ddev\.site|8026/);
+  assert.match(cucumber, /moderator: process\.env\.MODERATOR \|\| 'moderator'/, 'the rest is as on DDEV');
+});
+
+test('the tool says the address of the runtime, and the mailbox only where it has one', () => {
+  const p = project('phpbb');
+  const env = ENV(p, path.join(p.root, 'ddev.log'));
+  const say = (layer: string) => bash(`${layer} RUN=_none_ ; ADD_USERS=no ; CANCEL_USERS=no ; SAMPLE_CONTENT=no ; TIDY=no ; trim_project_name() { :; } ; phpbb_cli_tool`, env).stdout;
+  assert.match(say(''), /^ {2}the board: https:\/\/site1\.ddev\.site\n {2}its mail: {2}https:\/\/site1\.ddev\.site:8026$/m);
+  const docker = say('runtime_of() { echo docker ; } ; rt_url() { echo http://127.0.0.1:41234 ; } ; rt_mail_url() { echo http://127.0.0.1:41235 ; } ;');
+  assert.match(docker, /^ {2}the board: http:\/\/127\.0\.0\.1:41234\n {2}its mail: {2}http:\/\/127\.0\.0\.1:41235$/m);
+  const older = say('runtime_of() { echo docker ; } ; rt_url() { echo http://127.0.0.1:41234 ; } ;');
+  assert.doesNotMatch(older, /its mail/, 'a core whose layer gives the mailbox no address: none is said');
+});
+
+test('the feature of the runtimes drives a board the plugin claims, and names no platform in a step', () => {
+  const feature = fs.readFileSync(path.join(PKG, 'features', 'phpbb-runtimes.feature'), 'utf8');
+  const scenarios = feature.split(/\n(?=  @needs-runtime-)/).slice(1);
+  assert.strictEqual(scenarios.length, 6);
+  for (const s of scenarios) assert.match(s, /^  @needs-runtime-(docker|kubernetes) @needs-platform-phpbb\n  Scenario: /);
+  const steps = feature.split('\n').filter((l) => /^\s*(Given|When|Then|And|But) /.test(l));
+  for (const s of steps) assert.doesNotMatch(s, /phpbb/i, s);
+  assert.doesNotMatch(feature, /ddev\.site|127\.0\.0\.1/);
+  const manifest = JSON.parse(fs.readFileSync(path.join(PKG, 'package.json'), 'utf8')).workspacePlugin;
+  assert.ok(manifest.features.includes('features/phpbb-runtimes.feature'));
+  assert.match(manifest.featuresSite, /^cmd-phpbb-project\.sh ci-phpbb( [A-Za-z0-9._=-]+)* --runtime docker$/);
+});

@@ -34,7 +34,10 @@ bash cmd-phpbb-project.sh myold --install --add-users --php-version 8.1       # 
 The release package is fetched in the web container, checked against the sum its publisher gives, unpacked in
 `phpbb/` (the docroot of a PHP project served by Apache with the release's own rules) and installed with the board's
 own command-line installer on the project's database; the folder of the installer is removed after it, as the board
-asks. The board answers at `https://myboard.ddev.site`, the mail catcher at `https://myboard.ddev.site:8026`. A
+asks. On DDEV the board answers at `https://myboard.ddev.site`, the mail catcher at `https://myboard.ddev.site:8026`. With
+`--runtime docker` or `--runtime kubernetes` it is built on Docker Compose or a Kubernetes cluster, at the address the
+build prints (`http://127.0.0.1:<port>`, or the node's address and a port), and `bash cmd-tools-phpbb-cli.sh <name>`
+says it and its mailbox: never write a `ddev.site` address for such a board. A
 build takes about a minute and a half. Check the free memory and disk first (`free -g`, `df -h /`) and build one
 site at a time.
 

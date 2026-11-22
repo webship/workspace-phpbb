@@ -7,7 +7,9 @@
 # Build a phpBB board in a container: the release package (its SHA-256 sum checked) unpacked in phpbb/, the docroot of
 # a PHP project served by Apache. With --install it is installed with its own command-line installer on the
 # project's database, the workspace account as its founder, and set up for testing; with --add-users it also gets
-# the default accounts; with --sample-content the forums and topics the step pack is tested on.
+# the default accounts; with --sample-content the forums and topics the step pack is tested on. On DDEV (the default)
+# it is at https://<name>.ddev.site; with --runtime docker, podman or kubernetes it is built on that runtime, at the
+# address the build prints.
 
 # Bootstrap.
 # Find the workspace tooling from this script, so a fresh clone needs no setup.

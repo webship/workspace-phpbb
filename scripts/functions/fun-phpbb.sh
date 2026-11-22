@@ -13,9 +13,16 @@
 # Every container call is a plain verb of the container tool (config, start, exec, describe, launch), so the
 # workspace's runtime layer can carry it to another runtime.
 #
-# The container tool has no project type for a board, so a site of this plugin is recognised by a file
-# (.ddev/config.phpbb.yaml, written by the builder: the claim of the plugin on the project), and four names are the
-# ones the core's tools look for:
+# The runtimes: a board is built on DDEV, or with --runtime on Docker Compose, Podman or Kubernetes. The commands
+# are the same on each: `ddev <verb>` is DDEV itself on a DDEV project, and on another runtime the core's layer
+# (fun-runtime.sh) gives the verb its meaning there. What differs is behind phpbb_runtime: the address (phpbb_url)
+# and what the installer is told of it (plain HTTP on the site's port, the mail catcher on the host `mail`), the
+# claim of the plugin on the project, and the mailbox the tests read (phpbb_mail_url).
+#
+# The container tool has no project type for a board, so a site of this plugin is recognised by the claim of the
+# plugin on the project: on DDEV a file (.ddev/config.phpbb.yaml, written by the builder), on another runtime
+# `platform: phpbb` in the x-webship block of compose.yaml (the core's rt_claim). Four names are the ones the
+# core's tools look for:
 #   set_phpbb_users          the default accounts                (cmd-tools-add-users.sh <project> phpbb)
 #   add_phpbb_users          create them with the board's code   (the same tool, and --add-users of the builder)
 #   cancel_phpbb_users       delete them                         (cmd-tools-cancel-users.sh <project> phpbb)
@@ -52,8 +59,30 @@ function set_phpbb_users() {
   user_newmember_role='newmember' ;
 }
 
-# Is this folder a board of this plugin? The builder leaves .ddev/config.phpbb.yaml in it.
+# The runtime of the project in this folder, or of a new build (--runtime, else the workspace's setting, else
+# DDEV). A core without the runtime layer has DDEV only.
+function phpbb_runtime() {
+  if declare -f runtime_of > /dev/null ; then runtime_of ; else echo 'ddev' ; fi
+}
+
+# The address of the board in this folder: https://<name>.ddev.site on DDEV, http://127.0.0.1:<port> on Docker
+# Compose and Podman, the node's address and a port on Kubernetes. Asked after `ddev config`.
+function phpbb_url() {
+  if declare -f rt_url > /dev/null ; then rt_url ; else echo "https://${PROJECT_NAME}.ddev.site" ; fi
+}
+
+# The address of the mailbox that catches the board's mail: port 8026 of a DDEV project; on another runtime the
+# one the core's layer gives it (rt_mail_url), or nothing on a core whose layer gives it none yet.
+function phpbb_mail_url() {
+  if [ "$(phpbb_runtime)" == 'ddev' ] ; then echo "$(phpbb_url):8026" ;
+  elif declare -f rt_mail_url > /dev/null ; then rt_mail_url ; fi
+}
+
+# Is this folder a board of this plugin? The claim of the plugin says so, which the core's rt_is_platform reads on
+# every runtime: .ddev/config.phpbb.yaml on DDEV (the builder leaves it there), `platform: phpbb` in compose.yaml
+# on another runtime.
 function phpbb_is_project() {
+  if declare -f rt_is_platform > /dev/null ; then rt_is_platform "$1" phpbb ; return $? ; fi
   [ -f "$1/.ddev/config.phpbb.yaml" ] ;
 }
 
@@ -71,7 +100,7 @@ function phpbb_enter_project() {
     return 1 ;
   fi
   if ! phpbb_is_project "${project_path}" ; then
-    echo "${doc_name}/${PROJECT_NAME} is not a board of this plugin (it has no .ddev/config.phpbb.yaml)." ;
+    echo "${doc_name}/${PROJECT_NAME} is not a board of this plugin (it has no .ddev/config.phpbb.yaml, and compose.yaml does not say platform: phpbb)." ;
     return 1 ;
   fi
   cd "${project_path}" || return 1 ;
@@ -151,12 +180,20 @@ function phpbb_download() {
     && mkdir -p ${PHPBB_BOARD} && tar -xjf phpbb.tar.bz2 --strip-components=1 -C ${PHPBB_BOARD} && rm -f phpbb.tar.bz2 phpbb.sha256" < /dev/null ;
 }
 
-# Install the board with its own command-line installer: the workspace account as its founder, the project's
-# database, the project's address, mail over SMTP to the mail catcher of the web container. The settings of the
+# Install the board with its own command-line installer ($1: the address of the board without its scheme, $2: its
+# name): the workspace account as its founder, the project's database, the project's address, mail over SMTP to the mail catcher of the web container. The settings of the
 # installer go to it on standard input and into its own folder, which is removed after the install, as the board
 # asks.
 function phpbb_install() {
   local host="$1" title="$2" ;
+  # DDEV: HTTPS on the router's port, the mail catcher in the web container. Another runtime: plain HTTP on the
+  # site's own port, the mail catcher on the host `mail` of the project's stack, and the board follows the
+  # address it is asked on (a port of this machine, a node of the cluster, a tunnel).
+  local protocol='https://' port='443' secure='true' forced='true' smtp_host='localhost' ;
+  if [ "$(phpbb_runtime)" != 'ddev' ] ; then
+    # The address without its scheme is a host and a port there.
+    protocol='http://' ; port="${host##*:}" ; host="${host%:*}" ; secure='false' ; forced='false' ; smtp_host='mail' ;
+  fi
   ddev exec "cat > ${PHPBB_BOARD}/install/install-config.yml" <<CONFIGEOF || return 1
 installer:
     admin:
@@ -178,17 +215,17 @@ installer:
     email:
         enabled: true
         smtp_delivery: true
-        smtp_host: localhost
+        smtp_host: ${smtp_host}
         smtp_port: 1025
         smtp_auth: PLAIN
         smtp_user: ~
         smtp_pass: ~
     server:
-        cookie_secure: true
-        server_protocol: https://
-        force_server_vars: true
+        cookie_secure: ${secure}
+        server_protocol: ${protocol}
+        force_server_vars: ${forced}
         server_name: ${host}
-        server_port: 443
+        server_port: ${port}
         script_path: /
     extensions: []
 CONFIGEOF
@@ -209,7 +246,12 @@ CONFIGEOF
 # test content of the step pack.
 function phpbb_build() {
   trim_project_name ;
-  local base_url="https://${PROJECT_NAME}.ddev.site" ;
+  local base_url mail_url runtime ;
+  runtime="$(phpbb_runtime)" ;
+  if [ "${RUNTIME:-_none_}" != '_none_' ] && [ "${RUNTIME}" != "${runtime}" ] ; then
+    echo "--runtime ${RUNTIME} needs a Webship Workspace with the container runtimes (webship/workspace#694): update the workspace, or build on DDEV. Nothing was changed." ;
+    exit 1 ;
+  fi
   local version="${PHPBB_VERSION:-${site_phpbb_version:-${PHPBB_DEFAULT_VERSION}}}" ;
   local php_version="${PHP_VERSION:-${site_php_version:-${PHPBB_DEFAULT_PHP}}}" ;
   local project_path="${WORKSPACE_ROOT}/${doc_name}/${PROJECT_NAME}" ;
@@ -251,16 +293,24 @@ function phpbb_build() {
   # Node.js of the workspace for a test suite run in the web container.
   ddev config --project-type=php --docroot=phpbb --webserver-type=apache-fpm --php-version="${php_version}" \
     --project-name=${PROJECT_NAME} --nodejs-version=$(ddev_nodejs_version) < /dev/null || exit 1 ;
-  phpbb_write_config "${project_path}" "${version}" || exit 1 ;
+  # The claim of the plugin on the project: its own file on DDEV, the core's rt_claim on another runtime.
+  if [ "${runtime}" == 'ddev' ] ; then
+    phpbb_write_config "${project_path}" "${version}" || exit 1 ;
+  else
+    rt_claim phpbb || exit 1 ;
+  fi
 
   echo "Starting the project." ;
   ddev_up start -y < /dev/null || exit 1 ;
+  # The address is the runtime's to say, once the project is configured: never a written ddev.site.
+  base_url="$(phpbb_url)" ;
+  mail_url="$(phpbb_mail_url)" ;
   echo "Fetching phpBB ${version} and checking its SHA-256 sum." ;
   phpbb_download "${version}" || { echo "The release package did not come, or its sum did not match." ; exit 1 ; } ;
 
   if [ "${INSTALL}" == 'yes' ] ; then
     echo "Installing it, with the workspace account ${account_name} as its founder." ;
-    phpbb_install "${PROJECT_NAME}.ddev.site" "${BOARD_NAME:-${PROJECT_NAME}}" || { echo "The installer did not finish." ; exit 1 ; } ;
+    phpbb_install "${base_url#*://}" "${BOARD_NAME:-${PROJECT_NAME}}" || { echo "The installer did not finish." ; exit 1 ; } ;
     users=() ;
     phpbb_site settings || exit 1 ;
     if [ "${ADD_USERS}" == 'yes' ] ; then
@@ -273,7 +323,7 @@ function phpbb_build() {
       users=() ;
     fi
     echo "${doc_name} ${PROJECT_NAME} has been installed: phpBB $(phpbb_version)." ;
-    echo "The board: ${base_url} · its mail: ${base_url}:8026 · its founder: ${account_name}" ;
+    echo "The board: ${base_url}${mail_url:+ · its mail: ${mail_url}} · its founder: ${account_name}" ;
   else
     echo "${doc_name} ${PROJECT_NAME} is ready, not installed: phpBB $(phpbb_version) at ${base_url} shows its installer." ;
     echo "Build it again with --install (and --add-users) to install it with the workspace account as its founder." ;
@@ -361,8 +411,8 @@ function phpbb_cli_tool() {
     phpbb_site tidy ; status=$? ;
   else
     echo "${doc_name}/${PROJECT_NAME}: phpBB $(phpbb_version)" ;
-    echo "  the board: https://${PROJECT_NAME}.ddev.site" ;
-    echo "  its mail:  https://${PROJECT_NAME}.ddev.site:8026" ;
+    echo "  the board: $(phpbb_url)" ;
+    [ -n "$(phpbb_mail_url)" ] && echo "  its mail:  $(phpbb_mail_url)" ;
     echo "  its founder: ${account_name}" ;
     echo "" ;
     echo "Accounts:" ;
@@ -403,7 +453,12 @@ function testing_configure_phpbb() {
   local site_name ;
   site_name="$(basename "${project_path}")" ;
 
-  python3 - "${project_path}" "${PHPBB_STEPS_PACKAGE}" "${PHPBB_STEPS_VERSION}" 'PHPBB' "${registry}" "https://${site_name:-${PROJECT_NAME}}.ddev.site" <<'PYEOF' || return 1
+  # On DDEV the board's address is written into cucumber.js, for a run that is given no LAUNCH_URL. On another
+  # runtime no address is written: the Workspace's tests container hands the suite LAUNCH_URL and MAIL_URL.
+  local address='' ;
+  [ "$(cd "${project_path}" && phpbb_runtime)" == 'ddev' ] && address="$(cd "${project_path}" && PROJECT_NAME="${site_name:-${PROJECT_NAME}}" phpbb_url)" ;
+
+  python3 - "${project_path}" "${PHPBB_STEPS_PACKAGE}" "${PHPBB_STEPS_VERSION}" 'PHPBB' "${registry}" "${address}" <<'PYEOF' || return 1
 import json, re, sys
 
 project, pack, version, prefix, registry, address = sys.argv[1:7]
@@ -449,7 +504,12 @@ if not world:
 pad = world.group(1) + '  '
 additions = []
 base = "(process.env.LAUNCH_URL || '%s').replace(/\\/+$/, '')" % address
-if not re.search(r"^[ \t]*mailUrl:", src, re.M):
+if not re.search(r"^[ \t]*mailUrl:", src, re.M) and not address:
+    additions += [
+        pad + "// The project's mail catcher: the Workspace's tests container says where it is (MAIL_URL).",
+        pad + "mailUrl: process.env.MAIL_URL || '',",
+    ]
+elif not re.search(r"^[ \t]*mailUrl:", src, re.M):
     additions += [
         pad + "// The project's mail catcher: in the web container (where the testing setup runs the suite) on its own port, else through the router.",
         pad + "mailUrl: process.env.MAIL_URL || (process.env.IS_DDEV_PROJECT ? 'http://127.0.0.1:8025' : `${%s}:8026`)," % base,
@@ -483,7 +543,7 @@ if additions:
 
 # The address the suite opens when LAUNCH_URL is not set: the placeholder of the scaffold becomes the board's.
 placeholder = "process.env.LAUNCH_URL || 'http://localhost:8080'"
-if placeholder in src:
+if placeholder in src and address:
     src = src.replace(placeholder, "process.env.LAUNCH_URL || '%s'" % address)
     print('  cucumber.js: the address of the board (%s)' % address)
 
